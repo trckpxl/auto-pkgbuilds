@@ -1,0 +1,123 @@
+
+name: Build mpv-git
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'mpv-git/**'
+      - '.github/workflows/mpv-git.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mpv-git-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Update Arch Linux.
+          pacman -Syu --noconfirm
+
+          # Install build dependencies.
+          pacman -S --needed --noconfirm \
+            git meson ninja cmake pkgconf \
+            python python-jinja \
+            lcms2 vulkan-icd-loader vulkan-headers \
+            glslang shaderc libdovi xxhash \
+            ladspa wayland-protocols \
+            ffnvcodec-headers python-docutils
+
+          # Create the build user.
+          useradd -m builder
+
+          printf 'builder ALL=(ALL:ALL) NOPASSWD: /usr/bin/pacman\n' \
+            > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          visudo -cf /etc/sudoers.d/builder
+
+          # Configure x86-64-v3.
+          sed -i 's/-march=x86-64/-march=x86-64-v3/g' \
+            /etc/makepkg.conf
+
+          sed -i "s|^MAKEFLAGS=.*|MAKEFLAGS=\"-j$(nproc)\"|" \
+            /etc/makepkg.conf
+
+          install -d -o builder -g builder \
+            "$GITHUB_WORKSPACE/packages"
+
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build and install libplacebo
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Build libplacebo with recursive submodules.
+          runuser -u builder -- bash -euo pipefail <<'BUILD'
+          cd /tmp
+          git clone --recursive \
+            https://code.videolan.org/videolan/libplacebo.git
+
+          cd libplacebo
+
+          meson setup build \
+            --prefix=/usr \
+            --buildtype=release \
+            --wrap-mode=nodownload \
+            -Dtests=false \
+            -Dvulkan=enabled
+
+          meson compile -C build
+
+          # Install into the container.
+          meson install -C build
+          BUILD
+
+          # Refresh the shared library cache.
+          ldconfig
+
+          # Verify the installed version.
+          pkg-config --modversion libplacebo
+          pkg-config --atleast-version=7.387.0 libplacebo
+
+      - name: Build mpv-git
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runuser -u builder -- env \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            bash -euo pipefail <<'BUILD'
+          cd "$GITHUB_WORKSPACE/mpv-git"
+
+          export PKGDEST="$GITHUB_WORKSPACE/packages"
+
+          # Build without installing mpv-git.
+          makepkg --syncdeps --noconfirm --clean
+          BUILD
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpv-git-x86-64-v3
+          path: packages/*.pkg.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
