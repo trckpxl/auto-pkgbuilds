@@ -1,0 +1,55 @@
+
+# Maintainer: Local package builder
+
+pkgname=libplacebo-git
+pkgver=7.0.0.r0.g0000000
+pkgrel=1
+pkgdesc='Reusable library for GPU-accelerated video processing'
+arch=('x86_64')
+url='https://code.videolan.org/videolan/libplacebo'
+license=('LGPL-2.1-or-later')
+depends=('glibc' 'lcms2' 'vulkan-icd-loader')
+makedepends=(
+  'git'
+  'meson'
+  'ninja'
+  'python'
+  'python-jinja'
+  'vulkan-headers'
+  'glslang'
+  'shaderc'
+  'libdovi'
+  'xxhash'
+)
+provides=('libplacebo' 'libplacebo.so')
+conflicts=('libplacebo')
+
+source=('git+https://code.videolan.org/videolan/libplacebo.git')
+sha256sums=('SKIP')
+
+pkgver() {
+  cd libplacebo
+  git describe --long --tags --always |
+    sed -E 's/^v//; s/([^-]+)-([0-9]+)-g/ \1.r\2.g/; s/-/./g' |
+    tr -d ' '
+}
+
+prepare() {
+  cd libplacebo
+  git submodule update --init --recursive
+}
+
+build() {
+  meson setup build libplacebo \
+    --prefix=/usr \
+    --buildtype=release \
+    --wrap-mode=nodownload \
+    -Dtests=false \
+    -Dvulkan=enabled
+
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+}

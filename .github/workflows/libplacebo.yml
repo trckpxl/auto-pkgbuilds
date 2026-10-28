@@ -1,0 +1,76 @@
+
+name: Build libplacebo-git
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'libplacebo/**'
+      - '.github/workflows/libplacebo.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: libplacebo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pacman -Syu --noconfirm
+
+          useradd -m builder
+
+          printf 'builder ALL=(ALL:ALL) NOPASSWD: /usr/bin/pacman\n' \
+            > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          visudo -cf /etc/sudoers.d/builder
+
+          sed -i 's/-march=x86-64/-march=x86-64-v3/g' \
+            /etc/makepkg.conf
+
+          sed -i "s|^MAKEFLAGS=.*|MAKEFLAGS=\"-j$(nproc)\"|" \
+            /etc/makepkg.conf
+
+          install -d -o builder -g builder \
+            "$GITHUB_WORKSPACE/packages"
+
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runuser -u builder -- env \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            bash -euo pipefail <<'BUILD'
+          cd "$GITHUB_WORKSPACE/libplacebo"
+          export PKGDEST="$GITHUB_WORKSPACE/packages"
+
+          makepkg --syncdeps --noconfirm --clean
+          BUILD
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: libplacebo-git-x86-64-v3
+          path: packages/*.pkg.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
