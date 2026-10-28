@@ -19,7 +19,7 @@ jobs:
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          chown -R builder:builder /github/workspace
+          chown -R builder:builder ${{ github.workspace }}
           sed -i 's/#MAKEFLAGS="-j2"/MAKEFLAGS="-j$(nproc)"/' /etc/makepkg.conf
           sed -i 's/-march=x86-64/-march=x86-64-v3/g' /etc/makepkg.conf
 
