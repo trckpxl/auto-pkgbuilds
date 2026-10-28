@@ -26,6 +26,7 @@ jobs:
       - name: Compile packages
         shell: su builder -c "cd $GITHUB_WORKSPACE && bash {0}"
         run: |
+          sudo pacman -Sy --noconfirm
           for dir in $(find . -maxdepth 2 -name "PKGBUILD" -exec dirname {} \;); do
             cd "$dir"
             makepkg -si --noconfirm --skippgpcheck
