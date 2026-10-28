@@ -85,12 +85,10 @@ jobs:
             -Dvulkan=enabled
 
           meson compile -C build
-
-          # Install into the container.
-          meson install -C build
           BUILD
 
-          # Refresh the shared library cache.
+          # Install system files as root.
+          meson install -C /tmp/libplacebo/build
           ldconfig
 
           # Verify the installed version.
