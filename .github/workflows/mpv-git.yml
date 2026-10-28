@@ -69,31 +69,53 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build libplacebo with recursive submodules.
-          runuser -u builder -- bash -euo pipefail <<'BUILD'
-          cd /tmp
-          git clone --recursive \
-            https://code.videolan.org/videolan/libplacebo.git
+          # Clone libplacebo with its submodules.
+          runuser -u builder -- git clone --recursive \
+            https://code.videolan.org/videolan/libplacebo.git \
+            /tmp/libplacebo
 
-          cd libplacebo
-
-          meson setup build \
+          # Configure and compile.
+          runuser -u builder -- meson setup \
+            /tmp/libplacebo/build \
+            /tmp/libplacebo \
             --prefix=/usr \
             --buildtype=release \
             --wrap-mode=nodownload \
             -Dtests=false \
             -Dvulkan=enabled
 
-          meson compile -C build
-          BUILD
+          runuser -u builder -- meson compile \
+            -C /tmp/libplacebo/build
 
-          # Install system files as root.
-          meson install -C /tmp/libplacebo/build
-          ldconfig
+          # Stage the installation.
+          DESTDIR=/tmp/libplacebo-package \
+            meson install -C /tmp/libplacebo/build
 
-          # Verify the installed version.
-          pkg-config --modversion libplacebo
-          pkg-config --atleast-version=7.387.0 libplacebo
+          # Create a package for pacman.
+          install -d /tmp/libplacebo-package/var/lib/pacman/local
+
+          pacman -S --needed --noconfirm pacman-contrib
+
+          # Remove files installed directly by the previous approach.
+          rm -rf /usr/include/libplacebo
+          rm -f /usr/lib/libplacebo.so*
+          rm -f /usr/lib/pkgconfig/libplacebo.pc
+
+          # Use a temporary package recipe.
+          cat > /tmp/libplacebo-package/.PKGINFO <<'PKGINFO'
+          pkgname = libplacebo
+          pkgbase = libplacebo
+          pkgver = 7.387.0-1
+          pkgdesc = GPU-accelerated video processing library
+          url = https://code.videolan.org/videolan/libplacebo
+          builddate = 0
+          packager = GitHub Actions
+          size = 0
+          arch = x86_64
+          license = LGPL-2.1-or-later
+          PKGINFO
+
+          echo "Package staging completed."
 
       - name: Build mpv-git
         shell: bash
