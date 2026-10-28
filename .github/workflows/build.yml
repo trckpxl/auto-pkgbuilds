@@ -1,42 +1,108 @@
-name: Build v3 Packages
+
+name: Build x86-64-v3 Packages
 
 on:
   workflow_dispatch:
   push:
     paths:
       - '**/PKGBUILD'
+      - '**/install'
+      - '**/*.patch'
+      - '**/keys/**'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-v3-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+
     container:
       image: archlinux:base-devel
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup environment
+        shell: bash
         run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          set -euo pipefail
+
+          # Update the system.
+          pacman -Syu --noconfirm
+
+          # Create an unprivileged builder.
+          useradd --create-home builder
+
+          printf 'builder ALL=(ALL:ALL) NOPASSWD: /usr/bin/pacman\n' \
+            > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          visudo -cf /etc/sudoers.d/builder
+
+          # Configure build flags.
+          sed -i 's/-march=x86-64/-march=x86-64-v3/g' \
+            /etc/makepkg.conf
+
+          if grep -q '^MAKEFLAGS=' /etc/makepkg.conf; then
+            sed -i "s|^MAKEFLAGS=.*|MAKEFLAGS=\"-j$(nproc)\"|" \
+              /etc/makepkg.conf
+          else
+            echo "MAKEFLAGS=\"-j$(nproc)\"" >> /etc/makepkg.conf
+          fi
+
+          # Prepare the output directory.
+          install -d -o builder -g builder \
+            "$GITHUB_WORKSPACE/packages"
+
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          sed -i 's/#MAKEFLAGS="-j2"/MAKEFLAGS="-j$(nproc)"/' /etc/makepkg.conf
-          sed -i 's/-march=x86-64/-march=x86-64-v3/g' /etc/makepkg.conf
 
-      - name: Compile packages
-        shell: su builder -c "cd $GITHUB_WORKSPACE && bash {0}"
+      - name: Build packages
+        shell: bash
         run: |
-          sudo pacman -Sy --noconfirm
-          for dir in $(find . -maxdepth 2 -name "PKGBUILD" -exec dirname {} \;); do
-            cd "$dir"
-            makepkg -si --noconfirm --skippgpcheck
-            cd - > /dev/null
-          done
+          set -euo pipefail
 
-      - uses: actions/upload-artifact@v4
+          runuser -u builder -- env \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            bash -euo pipefail <<'BUILD'
+          cd "$GITHUB_WORKSPACE"
+          export PKGDEST="$GITHUB_WORKSPACE/packages"
+
+          # Build each PKGBUILD.
+          while IFS= read -r -d '' pkgbuild; do
+            dir="${pkgbuild%/PKGBUILD}"
+
+            echo "::group::Building ${dir#./}"
+            cd "$GITHUB_WORKSPACE/$dir"
+
+            makepkg --syncdeps --noconfirm --clean
+
+            cd "$GITHUB_WORKSPACE"
+            echo "::endgroup::"
+          done < <(
+            find . -mindepth 2 -maxdepth 3 \
+              -type f -name PKGBUILD -print0 |
+              sort -z
+          )
+
+          # Fail if no packages were produced.
+          compgen -G "$PKGDEST/*.pkg.tar.zst" > /dev/null || {
+            echo "Error: no packages were generated."
+            exit 1
+          }
+          BUILD
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
         with:
           name: packages-x86_64-v3
-          path: |
-            **/*.pkg.tar.zst
-            !**/src/**
-            !**/pkg/**
+          path: packages/*.pkg.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
