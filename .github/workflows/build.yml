@@ -1,0 +1,41 @@
+name: Build v3 Packages
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/PKGBUILD'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup environment
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder /github/workspace
+          sed -i 's/#MAKEFLAGS="-j2"/MAKEFLAGS="-j$(nproc)"/' /etc/makepkg.conf
+          sed -i 's/-march=x86-64/-march=x86-64-v3/g' /etc/makepkg.conf
+
+      - name: Compile packages
+        shell: su builder -c "bash {0}"
+        run: |
+          for dir in $(find . -maxdepth 2 -name "PKGBUILD" -exec dirname {} \;); do
+            cd "$dir"
+            makepkg -si --noconfirm --skippgpcheck
+            cd - > /dev/null
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-x86_64-v3
+          path: |
+            **/*.pkg.tar.zst
+            !**/src/**
+            !**/pkg/**
